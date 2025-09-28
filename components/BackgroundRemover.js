@@ -26,7 +26,7 @@ export default function BackgroundRemover() {
       
       // Load BodyPix model with simpler configuration
       const loadedModel = await bodyPix.load({
-        architecture: 'MobileNetV1', // More reliable than ResNet
+        architecture: 'MobileNetV1',
         outputStride: 16,
         multiplier: 0.75,
         quantBytes: 2
@@ -43,7 +43,7 @@ export default function BackgroundRemover() {
     setModelLoading(false);
   };
 
-  // Simple background removal without complex edge detection
+  // Correct background removal using proper BodyPix API
   const removeBackground = async () => {
     if (!model || !originalImage) return;
 
@@ -67,26 +67,17 @@ export default function BackgroundRemover() {
       // Draw original image
       ctx.drawImage(img, 0, 0);
 
-      // Simple segmentation
+      // Get segmentation
       const segmentation = await model.segmentPerson(canvas, {
-        internalResolution: 'medium', // Balanced between speed and quality
+        internalResolution: 'medium',
         segmentationThreshold: 0.7,
-        maxDetections: 5,
-        scoreThreshold: 0.3
       });
 
-      // Create mask
-      const mask = await model.toMask(segmentation);
-      const maskCanvas = document.createElement('canvas');
-      const maskCtx = maskCanvas.getContext('2d');
-      maskCanvas.width = img.width;
-      maskCanvas.height = img.height;
-      maskCtx.putImageData(mask, 0, 0);
-
+      // Create mask using the CORRECT BodyPix API
+      const mask = bodyPixToMask(segmentation, img.width, img.height);
+      
       // Apply mask to create transparency
-      ctx.globalCompositeOperation = 'destination-in';
-      ctx.drawImage(maskCanvas, 0, 0);
-      ctx.globalCompositeOperation = 'source-over';
+      applyMask(ctx, mask, img.width, img.height);
 
       // Get result
       const resultUrl = canvas.toDataURL('image/png');
@@ -98,6 +89,49 @@ export default function BackgroundRemover() {
     }
     
     setLoading(false);
+  };
+
+  // CORRECT: Create mask from segmentation data
+  const bodyPixToMask = (segmentation, width, height) => {
+    const mask = new ImageData(width, height);
+    
+    for (let i = 0; i < segmentation.data.length; i++) {
+      const pixelValue = segmentation.data[i];
+      const maskIndex = i * 4;
+      
+      if (pixelValue === 1) {
+        // Person - make pixel white (opaque)
+        mask.data[maskIndex] = 255;     // R
+        mask.data[maskIndex + 1] = 255; // G
+        mask.data[maskIndex + 2] = 255; // B
+        mask.data[maskIndex + 3] = 255; // A
+      } else {
+        // Background - make pixel black (transparent)
+        mask.data[maskIndex] = 0;       // R
+        mask.data[maskIndex + 1] = 0;   // G
+        mask.data[maskIndex + 2] = 0;   // B
+        mask.data[maskIndex + 3] = 0;   // A
+      }
+    }
+    
+    return mask;
+  };
+
+  // Apply mask to canvas
+  const applyMask = (ctx, mask, width, height) => {
+    // Create temporary canvas for mask
+    const maskCanvas = document.createElement('canvas');
+    const maskCtx = maskCanvas.getContext('2d');
+    maskCanvas.width = width;
+    maskCanvas.height = height;
+    
+    // Apply mask to temporary canvas
+    maskCtx.putImageData(mask, 0, 0);
+    
+    // Use destination-in to apply transparency
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
   };
 
   const handleFileUpload = (event) => {
@@ -281,6 +315,14 @@ export default function BackgroundRemover() {
 
       {/* Hidden canvas */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
+      
+      {/* Add CSS for spinner animation */}
+      <style jsx>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
