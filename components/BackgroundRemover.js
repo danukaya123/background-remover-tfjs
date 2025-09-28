@@ -10,40 +10,54 @@ export default function BackgroundRemover() {
   const fileInputRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Load TensorFlow.js and BodyPix dynamically
+  // Load MediaPipe Selfie Segmentation
   const loadModel = async () => {
     setModelLoading(true);
     setError(null);
     
     try {
-      console.log('Loading TensorFlow.js...');
+      console.log('Loading MediaPipe Selfie Segmentation...');
       
-      // Dynamically import TensorFlow.js
-      const tf = await import('@tensorflow/tfjs');
-      const bodyPix = await import('@tensorflow-models/body-pix');
+      // Dynamically import MediaPipe
+      const selfieSegmentation = await import('@mediapipe/selfie_segmentation');
+      const { SelfieSegmentation } = selfieSegmentation;
       
-      console.log('TensorFlow.js loaded, now loading BodyPix model...');
-      
-      // Load BodyPix model with simpler configuration
-      const loadedModel = await bodyPix.load({
-        architecture: 'MobileNetV1',
-        outputStride: 16,
-        multiplier: 0.75,
-        quantBytes: 2
+      // Create and configure the model
+      const loadedModel = new SelfieSegmentation({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+        }
       });
+
+      loadedModel.setOptions({
+        modelSelection: 1, // 0-general, 1-landscape (better accuracy)
+        selfieMode: false,
+      });
+
+      loadedModel.onResults((results) => {
+        // Model is ready when it can process results
+        console.log('✅ MediaPipe model loaded successfully');
+        setModel(loadedModel);
+        setModelLoading(false);
+      });
+
+      // Initialize with a blank image to trigger loading
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 100;
+      tempCanvas.height = 100;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.fillRect(0, 0, 100, 100);
       
-      console.log('✅ BodyPix model loaded successfully');
-      setModel(loadedModel);
+      await loadedModel.send({ image: tempCanvas });
       
     } catch (error) {
-      console.error('❌ Error loading model:', error);
+      console.error('❌ Error loading MediaPipe model:', error);
       setError(`Failed to load AI model: ${error.message}. Please refresh and try again.`);
+      setModelLoading(false);
     }
-    
-    setModelLoading(false);
   };
 
-  // Correct background removal using proper BodyPix API
+  // Process image with MediaPipe (much more accurate)
   const removeBackground = async () => {
     if (!model || !originalImage) return;
 
@@ -64,22 +78,35 @@ export default function BackgroundRemover() {
       canvas.width = img.width;
       canvas.height = img.height;
 
-      // Draw original image
+      // Draw original image first
       ctx.drawImage(img, 0, 0);
 
-      // Get segmentation
-      const segmentation = await model.segmentPerson(canvas, {
-        internalResolution: 'medium',
-        segmentationThreshold: 0.7,
+      // Use MediaPipe for segmentation (much more accurate)
+      await new Promise((resolve) => {
+        model.onResults((results) => {
+          // Clear canvas
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          
+          // Draw only the person (segmentation mask)
+          ctx.save();
+          ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+          
+          // Only keep the parts of the original image where mask is opaque
+          ctx.globalCompositeOperation = 'source-in';
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          
+          // Restore
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.restore();
+
+          resolve();
+        });
+
+        // Process the image
+        model.send({ image: canvas });
       });
 
-      // Create mask using the CORRECT BodyPix API
-      const mask = bodyPixToMask(segmentation, img.width, img.height);
-      
-      // Apply mask to create transparency
-      applyMask(ctx, mask, img.width, img.height);
-
-      // Get result
+      // Get the final result
       const resultUrl = canvas.toDataURL('image/png');
       setProcessedImage(resultUrl);
       
@@ -89,49 +116,6 @@ export default function BackgroundRemover() {
     }
     
     setLoading(false);
-  };
-
-  // CORRECT: Create mask from segmentation data
-  const bodyPixToMask = (segmentation, width, height) => {
-    const mask = new ImageData(width, height);
-    
-    for (let i = 0; i < segmentation.data.length; i++) {
-      const pixelValue = segmentation.data[i];
-      const maskIndex = i * 4;
-      
-      if (pixelValue === 1) {
-        // Person - make pixel white (opaque)
-        mask.data[maskIndex] = 255;     // R
-        mask.data[maskIndex + 1] = 255; // G
-        mask.data[maskIndex + 2] = 255; // B
-        mask.data[maskIndex + 3] = 255; // A
-      } else {
-        // Background - make pixel black (transparent)
-        mask.data[maskIndex] = 0;       // R
-        mask.data[maskIndex + 1] = 0;   // G
-        mask.data[maskIndex + 2] = 0;   // B
-        mask.data[maskIndex + 3] = 0;   // A
-      }
-    }
-    
-    return mask;
-  };
-
-  // Apply mask to canvas
-  const applyMask = (ctx, mask, width, height) => {
-    // Create temporary canvas for mask
-    const maskCanvas = document.createElement('canvas');
-    const maskCtx = maskCanvas.getContext('2d');
-    maskCanvas.width = width;
-    maskCanvas.height = height;
-    
-    // Apply mask to temporary canvas
-    maskCtx.putImageData(mask, 0, 0);
-    
-    // Use destination-in to apply transparency
-    ctx.globalCompositeOperation = 'destination-in';
-    ctx.drawImage(maskCanvas, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
   };
 
   const handleFileUpload = (event) => {
@@ -180,8 +164,8 @@ export default function BackgroundRemover() {
 
   return (
     <div style={styles.container}>
-      <h1>🎨 Free Background Remover</h1>
-      <p>100% Free • Unlimited Usage • Privacy First</p>
+      <h1>🎨 Enhanced Background Remover</h1>
+      <p>Powered by MediaPipe • Better Accuracy • 100% Free</p>
 
       {/* Error Display */}
       {error && (
@@ -198,7 +182,7 @@ export default function BackgroundRemover() {
         {!model && !modelLoading && (
           <div style={styles.welcome}>
             <h3>🚀 Get Started</h3>
-            <p>Click below to load the AI model (first load may take 20-30 seconds)</p>
+            <p>Click below to load the enhanced AI model (faster and more accurate)</p>
           </div>
         )}
         
@@ -214,19 +198,19 @@ export default function BackgroundRemover() {
           {modelLoading ? (
             <>
               <div style={styles.spinner}></div>
-              Loading AI Model...
+              Loading Enhanced AI Model...
             </>
           ) : model ? (
-            '✅ AI Model Loaded!'
+            '✅ Enhanced AI Model Loaded!'
           ) : (
-            '🤖 Load AI Model'
+            '🤖 Load Enhanced AI Model'
           )}
         </button>
 
         {modelLoading && (
           <div style={styles.loadingInfo}>
-            <p>⏳ Downloading AI model (~20MB)...</p>
-            <p style={styles.smallText}>This may take 20-30 seconds on first load</p>
+            <p>⏳ Loading MediaPipe Selfie Segmentation...</p>
+            <p style={styles.smallText}>This model is faster and more accurate than the previous version</p>
           </div>
         )}
       </div>
@@ -302,14 +286,15 @@ export default function BackgroundRemover() {
         </div>
       )}
 
-      {/* Tips */}
-      <div style={styles.tips}>
-        <h3>💡 Tips for Best Results:</h3>
-        <ul style={styles.tipsList}>
-          <li>Use images with clear contrast between subject and background</li>
-          <li>Well-lit photos work better</li>
-          <li>Avoid very busy backgrounds</li>
-          <li>For people: clear full-body or upper-body shots work best</li>
+      {/* Benefits of MediaPipe */}
+      <div style={styles.benefits}>
+        <h3>🎯 Why MediaPipe is Better:</h3>
+        <ul style={styles.benefitsList}>
+          <li>✅ <strong>Better Edge Accuracy</strong> - Cleaner borders around hair and details</li>
+          <li>✅ <strong>Faster Processing</strong> - Optimized for real-time performance</li>
+          <li>✅ <strong>Smaller Model</strong> - Loads faster in your browser</li>
+          <li>✅ <strong>Google Technology</strong> - State-of-the-art segmentation</li>
+          <li>✅ <strong>Works Great on Mobile</strong> - Optimized for all devices</li>
         </ul>
       </div>
 
@@ -458,18 +443,18 @@ const styles = {
     borderRadius: '8px',
     border: '1px solid #e5e7eb'
   },
-  tips: {
+  benefits: {
     marginTop: '3rem',
     padding: '1.5rem',
-    background: '#f8f9fa',
+    background: '#f0f9ff',
     borderRadius: '12px',
-    border: '1px solid #e9ecef'
+    border: '1px solid #bae6fd'
   },
-  tipsList: {
+  benefitsList: {
     textAlign: 'left',
-    maxWidth: '500px',
+    maxWidth: '600px',
     margin: '1rem auto',
-    color: '#6b7280',
-    lineHeight: '1.6'
+    color: '#0369a1',
+    lineHeight: '1.8'
   }
 };
